@@ -309,9 +309,9 @@ namespace AAXClasses
                 case AAX_eStemFormat_Ambi_1_ACN: return AudioChannelSet::ambisonic (1);
                 case AAX_eStemFormat_Ambi_2_ACN: return AudioChannelSet::ambisonic (2);
                 case AAX_eStemFormat_Ambi_3_ACN: return AudioChannelSet::ambisonic (3);
-                case AAX_eStemFormat_Reserved_1:
-                case AAX_eStemFormat_Reserved_2:
-                case AAX_eStemFormat_Reserved_3:
+//                case AAX_eStemFormat_Reserved_1:
+//                case AAX_eStemFormat_Reserved_2:
+//                case AAX_eStemFormat_Reserved_3:
                 case AAX_eStemFormatNum:
                 case AAX_eStemFormat_Any:
                 case AAX_eStemFormat_INT32_MAX:
