@@ -190,6 +190,8 @@ public:
 
         node->properties.set (getOpenProp (type), true);
 
+        setUsingNativeTitleBar (true); // Ensure native window decorations
+
         setVisible (true);
     }
 
