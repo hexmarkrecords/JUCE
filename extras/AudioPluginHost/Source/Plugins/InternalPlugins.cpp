@@ -343,6 +343,286 @@ private:
 };
 
 //==============================================================================
+class DebugTestToneGenerator : public AudioProcessor
+{
+public:
+    DebugTestToneGenerator()
+        : AudioProcessor (BusesProperties().withOutput ("Output", AudioChannelSet::stereo()))
+    {
+    }
+
+    static String getIdentifier()
+    {
+        return "DebugTestToneGenerator";
+    }
+
+    void prepareToPlay (double newSampleRate, int) override
+    {
+        sampleRate = jmax (1.0, newSampleRate);
+        updatePhaseDelta();
+    }
+
+    void reset() override
+    {
+        currentPhase = 0.0;
+        updatePhaseDelta();
+    }
+
+    void releaseResources() override {}
+
+    void processBlock (AudioBuffer<float>& buffer, MidiBuffer&) override
+    {
+        renderBlock (buffer);
+    }
+
+    void processBlock (AudioBuffer<double>& buffer, MidiBuffer&) override
+    {
+        renderBlock (buffer);
+    }
+
+    const String getName() const override                                           { return getIdentifier(); }
+    double getTailLengthSeconds() const override                                    { return 0.0; }
+    bool acceptsMidi() const override                                               { return false; }
+    bool producesMidi() const override                                              { return false; }
+    AudioProcessorEditor* createEditor() override                                   { return new Editor (*this); }
+    bool hasEditor() const override                                                 { return true; }
+    int getNumPrograms() override                                                   { return 1; }
+    int getCurrentProgram() override                                                { return 0; }
+    void setCurrentProgram (int) override                                           {}
+    const String getProgramName (int) override                                      { return {}; }
+    void changeProgramName (int, const String&) override                            {}
+    void getStateInformation (juce::MemoryBlock&) override                          {}
+    void setStateInformation (const void*, int) override                            {}
+
+    float getSineGain() const noexcept                                              { return sineGain.load(); }
+    float getNoiseGain() const noexcept                                             { return noiseGain.load(); }
+    void setSineGain (float newGain) noexcept                                       { sineGain.store (jlimit (0.0f, 1.0f, newGain)); }
+    void setNoiseGain (float newGain) noexcept                                      { noiseGain.store (jlimit (0.0f, 1.0f, newGain)); }
+
+private:
+    class Editor : public AudioProcessorEditor
+    {
+    public:
+        explicit Editor (DebugTestToneGenerator& owner)
+            : AudioProcessorEditor (&owner),
+              ownerProcessor (owner)
+        {
+            configureSlider (sineGainSlider, sineGainLabel, "Sine Gain", ownerProcessor.getSineGain());
+            configureSlider (noiseGainSlider, noiseGainLabel, "Noise Gain", ownerProcessor.getNoiseGain());
+
+            addAndMakeVisible (sineGainLabel);
+            addAndMakeVisible (sineGainSlider);
+            addAndMakeVisible (noiseGainLabel);
+            addAndMakeVisible (noiseGainSlider);
+
+            sineGainSlider.onValueChange = [this] { ownerProcessor.setSineGain ((float) sineGainSlider.getValue()); };
+            noiseGainSlider.onValueChange = [this] { ownerProcessor.setNoiseGain ((float) noiseGainSlider.getValue()); };
+
+            setSize (320, 140);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds().reduced (12);
+            layoutSliderRow (bounds.removeFromTop (52), sineGainLabel, sineGainSlider);
+            bounds.removeFromTop (8);
+            layoutSliderRow (bounds.removeFromTop (52), noiseGainLabel, noiseGainSlider);
+        }
+
+    private:
+        static void configureSlider (Slider& slider, Label& label, const String& text, float initialValue)
+        {
+            label.setText (text, dontSendNotification);
+
+            slider.setSliderStyle (Slider::LinearHorizontal);
+            slider.setTextBoxStyle (Slider::TextBoxRight, false, 60, 20);
+            slider.setRange (0.0, 1.0, 0.001);
+            slider.setValue (initialValue, dontSendNotification);
+        }
+
+        static void layoutSliderRow (Rectangle<int> bounds, Label& label, Slider& slider)
+        {
+            auto labelBounds = bounds.removeFromLeft (90);
+            label.setBounds (labelBounds);
+            slider.setBounds (bounds);
+        }
+
+        DebugTestToneGenerator& ownerProcessor;
+        Slider sineGainSlider;
+        Label sineGainLabel;
+        Slider noiseGainSlider;
+        Label noiseGainLabel;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Editor)
+    };
+
+    template <typename SampleType>
+    void renderBlock (AudioBuffer<SampleType>& buffer)
+    {
+        const auto numChannels = buffer.getNumChannels();
+        const auto numSamples = buffer.getNumSamples();
+        const auto currentSineGain = (double) sineGain.load();
+        const auto currentNoiseGain = (double) noiseGain.load();
+
+        for (int channel = 0; channel < numChannels; ++channel)
+            buffer.clear (channel, 0, numSamples);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto sineSample = std::sin (currentPhase) * currentSineGain;
+            const auto noiseSample = (((double) random.nextFloat() * 2.0) - 1.0) * currentNoiseGain;
+            const auto mixedSample = (SampleType) (sineSample + noiseSample);
+
+            for (int channel = 0; channel < numChannels; ++channel)
+                buffer.setSample (channel, sample, mixedSample);
+
+            currentPhase += phaseDelta;
+
+            if (currentPhase >= MathConstants<double>::twoPi)
+                currentPhase -= MathConstants<double>::twoPi;
+        }
+    }
+
+    void updatePhaseDelta()
+    {
+        phaseDelta = MathConstants<double>::twoPi * testToneFrequency / sampleRate;
+    }
+
+    static constexpr double testToneFrequency = 440.0;
+
+    Random random;
+    std::atomic<float> sineGain { 1.0f / 3.0f };
+    std::atomic<float> noiseGain { 2.0f / 3.0f };
+    double sampleRate = 1.0;
+    double currentPhase = 0.0;
+    double phaseDelta = MathConstants<double>::twoPi * testToneFrequency;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DebugTestToneGenerator)
+};
+
+//==============================================================================
+class DebugTestToneRandomGenerator : public AudioProcessor
+{
+public:
+    DebugTestToneRandomGenerator()
+        : AudioProcessor (BusesProperties().withOutput ("Output", AudioChannelSet::stereo()))
+    {
+    }
+
+    static String getIdentifier()
+    {
+        return "DebugTestToneRandomGenerator";
+    }
+
+    void prepareToPlay (double newSampleRate, int) override
+    {
+        sampleRate = jmax (1.0, newSampleRate);
+        currentPhase = 0.0;
+        samplesUntilNextTone = 0;
+        chooseNextTone();
+    }
+
+    void reset() override
+    {
+        currentPhase = 0.0;
+        samplesUntilNextTone = 0;
+        chooseNextTone();
+    }
+
+    void releaseResources() override {}
+
+    void processBlock (AudioBuffer<float>& buffer, MidiBuffer&) override
+    {
+        renderBlock (buffer);
+    }
+
+    void processBlock (AudioBuffer<double>& buffer, MidiBuffer&) override
+    {
+        renderBlock (buffer);
+    }
+
+    const String getName() const override                                           { return getIdentifier(); }
+    double getTailLengthSeconds() const override                                    { return 0.0; }
+    bool acceptsMidi() const override                                               { return false; }
+    bool producesMidi() const override                                              { return false; }
+    AudioProcessorEditor* createEditor() override                                   { return nullptr; }
+    bool hasEditor() const override                                                 { return false; }
+    int getNumPrograms() override                                                   { return 1; }
+    int getCurrentProgram() override                                                { return 0; }
+    void setCurrentProgram (int) override                                           {}
+    const String getProgramName (int) override                                      { return {}; }
+    void changeProgramName (int, const String&) override                            {}
+    void getStateInformation (juce::MemoryBlock&) override                          {}
+    void setStateInformation (const void*, int) override                            {}
+
+private:
+    template <typename SampleType>
+    void renderBlock (AudioBuffer<SampleType>& buffer)
+    {
+        constexpr auto sineGain = 1.0 / 3.0;
+
+        const auto numChannels = buffer.getNumChannels();
+        const auto numSamples = buffer.getNumSamples();
+
+        for (int channel = 0; channel < numChannels; ++channel)
+            buffer.clear (channel, 0, numSamples);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            if (samplesUntilNextTone <= 0)
+                chooseNextTone();
+
+            const auto outputSample = (SampleType) (std::sin (currentPhase) * sineGain);
+
+            for (int channel = 0; channel < numChannels; ++channel)
+                buffer.setSample (channel, sample, outputSample);
+
+            currentPhase += phaseDelta;
+
+            if (currentPhase >= MathConstants<double>::twoPi)
+                currentPhase -= MathConstants<double>::twoPi;
+
+            --samplesUntilNextTone;
+        }
+    }
+
+    void chooseNextTone()
+    {
+        const auto noteIndex = random.nextInt (naturalMidiNoteCount);
+        const auto nextFrequency = MidiMessage::getMidiNoteInHertz (getNaturalMidiNoteAt (noteIndex));
+        phaseDelta = MathConstants<double>::twoPi * nextFrequency / sampleRate;
+        samplesUntilNextTone = jmax<int64> (1, static_cast<int64> (std::llround (sampleRate * toneDurationSeconds)));
+    }
+
+    static int getNaturalMidiNoteAt (int index)
+    {
+        switch (index)
+        {
+            case 0:  return 69; // A4
+            case 1:  return 71; // B4
+            case 2:  return 72; // C5
+            case 3:  return 74; // D5
+            case 4:  return 76; // E5
+            case 5:  return 77; // F5
+            case 6:  return 79; // G5
+            case 7:  return 81; // A5
+            default: return 69;
+        }
+    }
+
+    static constexpr int naturalMidiNoteCount = 8;
+    static constexpr double toneDurationSeconds = 3.0;
+
+    Random random;
+    double sampleRate = 1.0;
+    double currentPhase = 0.0;
+    double phaseDelta = MathConstants<double>::twoPi * 440.0;
+    int64 samplesUntilNextTone = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DebugTestToneRandomGenerator)
+};
+
+//==============================================================================
 class ReverbPlugin : public AudioProcessor
 {
 public:
@@ -440,6 +720,8 @@ InternalPluginFormat::InternalPluginFormat()
         [] { return std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (AudioProcessorGraph::AudioGraphIOProcessor::midiOutputNode); },
 
         [] { return std::make_unique<InternalPlugin> (std::make_unique<SineWaveSynth>()); },
+        [] { return std::make_unique<InternalPlugin> (std::make_unique<DebugTestToneGenerator>()); },
+        [] { return std::make_unique<InternalPlugin> (std::make_unique<DebugTestToneRandomGenerator>()); },
         [] { return std::make_unique<InternalPlugin> (std::make_unique<ReverbPlugin>()); },
 
         [] { return std::make_unique<InternalPlugin> (std::make_unique<AUv3SynthProcessor>()); },
