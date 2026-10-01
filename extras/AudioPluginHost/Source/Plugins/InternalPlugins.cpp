@@ -59,6 +59,7 @@ static std::unique_ptr<InputStream> createAssetInputStream (const char* resource
 #include "../../../../examples/Plugins/NoiseGatePluginDemo.h"
 #include "../../../../examples/Plugins/SamplerPluginDemo.h"
 #include "../../../../examples/Plugins/SurroundPluginDemo.h"
+#include "AudioPlayer.h"
 
 //==============================================================================
 class InternalPlugin   : public AudioPluginInstance
@@ -733,6 +734,7 @@ InternalPluginFormat::InternalPluginFormat()
         [] { return std::make_unique<InternalPlugin> (std::make_unique<MultiOutSynth>()); },
         [] { return std::make_unique<InternalPlugin> (std::make_unique<NoiseGate>()); },
         [] { return std::make_unique<InternalPlugin> (std::make_unique<SamplerAudioProcessor>()); },
+        [] { return std::make_unique<InternalPlugin> (std::make_unique<AudioPlayerProcessor>()); },
         [] { return std::make_unique<InternalPlugin> (std::make_unique<SurroundProcessor>()); }
     }
 {
