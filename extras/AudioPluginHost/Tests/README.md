@@ -10,6 +10,22 @@ ignored while playing. Note-off (including velocity-zero note-on), sustain,
 pressure, pitch bend and velocity do not change playback. Loading another file,
 resetting or releasing the processor stops it.
 
+Save the audio graph after choosing a file. The plugin saves its absolute file
+path in its graph state and reloads that file on recall, even if its editor is
+closed. Recall starts stopped; send a note-on to begin playback. The file itself
+is not embedded, so it must remain at the saved path. An unavailable file leaves
+the player silent and displays its path with an "Unable to load" label. The path
+is retained when saving again, so restoring the file later allows another recall
+to succeed. Choose another file with the existing load button to replace it.
+
+This is a file reference in plugin state, not a numeric automation parameter.
+AudioPluginHost calls state save/restore on the message thread. Restoration uses
+the same complete-file loading and atomic handoff as manual selection; it adds
+no decoding or filesystem access to the audio callback. A versioned XML payload
+stores `filePath`; legacy empty state clears the selection, and malformed or
+unknown-version state is ignored. An open editor receives change notifications
+so its waveform and file-path label reflect the restored selection.
+
 ## Architecture and implementation
 
 The existing implementation is `examples/Plugins/SamplerPluginDemo.h`:
@@ -87,7 +103,11 @@ level, channel-independent toggling, up/down sample-rate conversion, mono output
 double precision, invalid-file rejection, editor reopening, rapid file replacement,
 and unload. The original Sampler is instantiated with its default cello asset,
 then checked for audible start and its existing note-off tail ending in silence.
-These tests and the full host build passed.
+Additional state tests cover file-path round trips while playing, recall with no
+editor, initial silence followed by exact playback from the beginning, restore
+with an open editor, missing files remaining silent and retaining their saved
+reference, malformed state, and legacy empty state. These tests and the full host
+build passed.
 
 ## Limits and remaining manual validation
 
@@ -99,8 +119,8 @@ The complete decoded file resides in RAM. The shared Sample supports only its
 first two channels and an integer frame count; empty files, invalid rates and
 files exceeding `INT_MAX - 4` frames are rejected. Available memory limits
 practical file size; loading is synchronous on the GUI thread, as in the Sampler.
-Files and playback state are session-only, matching the Sampler's empty state
-serialization. Linear interpolation is intentionally simple and provides no
+File selections persist via graph state; playback position and active MIDI toggles
+are not serialized. The original Sampler retains its existing state behaviour. Linear interpolation is intentionally simple and provides no
 high-quality antialiasing. Discontinuous file endpoints or instant toggles can
 click; no crossfade is added. If the message thread is busy, adopting a subsequent
 load can be deferred until it reclaims the retired file; active playback continues.

@@ -33,7 +33,7 @@
 #include <cmath>
 #include <limits>
 
-class AudioPlayerProcessor final : public AudioProcessor, private Timer
+class AudioPlayerProcessor final : public AudioProcessor, private Timer, private ChangeBroadcaster
 {
 public:
     AudioPlayerProcessor()
@@ -62,9 +62,56 @@ public:
     void setCurrentProgram (int) override                 {}
     const String getProgramName (int) override            { return "None"; }
     void changeProgramName (int, const String&) override  {}
-    // Like the Sampler demo, loaded files are session-only.
-    void getStateInformation (MemoryBlock&) override      {}
-    void setStateInformation (const void*, int) override  {}
+    // AudioPluginHost saves/restores internal plugin state on the message thread.
+    // Persist the file reference, not the decoded audio or active MIDI toggle.
+    void getStateInformation (MemoryBlock& destination) override
+    {
+        XmlElement state ("AudioPlayerState");
+        state.setAttribute ("version", 1);
+        state.setAttribute ("filePath", selectedFilePath);
+        copyXmlToBinary (state, destination);
+    }
+
+    void setStateInformation (const void* data, int size) override
+    {
+        if (size == 0) // Graphs saved before file persistence was added.
+        {
+            AudioFormatManager manager;
+            setSample (nullptr, manager);
+            return;
+        }
+
+        auto state = getXmlFromBinary (data, size);
+        if (state == nullptr || ! state->hasTagName ("AudioPlayerState")
+            || state->getIntAttribute ("version") != 1)
+            return;
+
+        const auto path = state->getStringAttribute ("filePath");
+        AudioFormatManager manager;
+        manager.registerBasicFormats();
+        if (path.isEmpty())
+            setSample (nullptr, manager);
+        else if (! File::isAbsolutePath (path) || ! setFile (File (path), manager))
+        {
+            // Never keep unrelated old audio after a failed restore. Retain the
+            // reference so a later graph save does not discard the missing path.
+            setSample (nullptr, manager);
+            selectedFilePath = path;
+            fileUnavailable = true;
+            sendChangeMessage();
+        }
+    }
+
+    // Message thread only, used by both the editor and graph restoration.
+    bool setFile (const File& file, AudioFormatManager& manager)
+    {
+        if (! setSample (std::make_unique<FileAudioFormatReaderFactory> (file), manager))
+            return false;
+
+        selectedFilePath = file.getFullPathName();
+        sendChangeMessage();
+        return true;
+    }
 
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override
     {
@@ -120,6 +167,9 @@ public:
         timerCallback();
         delete pending.exchange (new LoadedFile { std::move (loaded) });
         readerFactory = std::move (factory); // GUI-owned snapshot, also used when reopening the editor.
+        selectedFilePath.clear();
+        fileUnavailable = false;
+        sendChangeMessage();
         return true;
     }
 
@@ -204,7 +254,7 @@ private:
         midi.clear();
     }
 
-    class Editor final : public AudioProcessorEditor, public FileDragAndDropTarget
+    class Editor final : public AudioProcessorEditor, public FileDragAndDropTarget, private ChangeListener
     {
     public:
         explicit Editor (AudioPlayerProcessor& p)
@@ -218,6 +268,7 @@ private:
             addAndMakeVisible (waveform);
             addAndMakeVisible (loadButton);
             addAndMakeVisible (instructions);
+            addAndMakeVisible (fileLabel);
             instructions.setText ("Note-on: start / same note: stop. Other notes ignored. Full file loops at original speed.",
                                   dontSendNotification);
             loadButton.onClick = [this]
@@ -229,19 +280,32 @@ private:
                         load (chooser.getResult());
                 });
             };
-            dataModel.setSampleReader (p.readerFactory != nullptr ? p.readerFactory->clone() : nullptr, nullptr);
+            owner.addChangeListener (this);
+            changeListenerCallback (&owner);
             setResizable (true, true);
             setResizeLimits (640, 480, 2560, 1440);
             setSize (640, 480);
         }
 
+        ~Editor() override { owner.removeChangeListener (this); }
+
     private:
+        void changeListenerCallback (ChangeBroadcaster*) override
+        {
+            dataModel.setSampleReader (owner.readerFactory != nullptr ? owner.readerFactory->clone() : nullptr, nullptr);
+            const auto text = owner.selectedFilePath.isEmpty() ? String ("No audio file loaded")
+                : (owner.fileUnavailable ? String ("Unable to load: ") : String()) + owner.selectedFilePath;
+            fileLabel.setText (text, dontSendNotification);
+            fileLabel.setTooltip (text);
+        }
+
         void resized() override
         {
             auto bounds = getLocalBounds();
             auto top = bounds.removeFromTop (50);
             loadButton.setBounds (top.removeFromRight (100).reduced (4));
             instructions.setBounds (top.reduced (4));
+            fileLabel.setBounds (bounds.removeFromBottom (25).reduced (4, 0));
             waveform.setBounds (bounds);
         }
 
@@ -259,10 +323,7 @@ private:
 
         void load (const File& file)
         {
-            auto factory = std::make_unique<FileAudioFormatReaderFactory> (file);
-            if (owner.setSample (factory->clone(), formatManager))
-                dataModel.setSampleReader (std::move (factory), nullptr);
-            else
+            if (! owner.setFile (file, formatManager))
                 AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Audio Player",
                                                   "Unable to load the complete audio file. Check its format, length and available memory.");
         }
@@ -273,7 +334,7 @@ private:
         UndoManager undoManager;
         WaveformEditor waveform;
         TextButton loadButton { "Load New Sample" };
-        Label instructions;
+        Label instructions, fileLabel;
         std::unique_ptr<FileChooser> fileChooser;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Editor)
     };
@@ -286,6 +347,8 @@ private:
     std::atomic<LoadedFile*> pending { nullptr }, retired { nullptr };
     std::unique_ptr<LoadedFile> current;
     std::unique_ptr<AudioFormatReaderFactory> readerFactory;
+    String selectedFilePath; // Message-thread state; never accessed by the audio callback.
+    bool fileUnavailable = false;
     double outputSampleRate = 44100.0;
     double position = 0.0;
     int activeNote = -1; // Sole playback state: -1 stopped, otherwise the starting note number.

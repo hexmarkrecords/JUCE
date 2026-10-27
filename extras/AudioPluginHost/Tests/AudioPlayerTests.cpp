@@ -35,7 +35,7 @@ int main()
         manager.registerBasicFormats();
         AudioPlayerProcessor player;
         player.prepareToPlay (1000.0, 257);
-        require (player.setSample (std::make_unique<FileAudioFormatReaderFactory> (file), manager), "load WAV");
+        require (player.setFile (file, manager), "load WAV");
         AudioBuffer<float> block (2, 257);
         MidiBuffer midi;
         player.processBlock (block, midi);
@@ -96,7 +96,7 @@ int main()
             const auto expected = (source.getSample (0, index) + source.getSample (0, index + (i % 2))) * 0.5f;
             require (std::abs (doubles.getSample (0, i) - expected) < 1.0e-6, "sample-rate conversion and double precision");
         }
-        require (! player.setSample (std::make_unique<FileAudioFormatReaderFactory> (file.getSiblingFile ("missing.wav")), manager),
+        require (! player.setFile (file.getSiblingFile ("missing.wav"), manager),
                  "bad file rejected");
         require (player.setBusesLayout (AudioProcessor::BusesLayout { {}, { AudioChannelSet::mono() } }), "mono layout");
         player.prepareToPlay (500.0, 257);
@@ -114,7 +114,7 @@ int main()
             require (block.getMagnitude (0, 257) > 0.0f, "editor reopen preserves playback");
         }
         for (int i = 0; i < 4; ++i)
-            require (player.setSample (std::make_unique<FileAudioFormatReaderFactory> (file), manager), "rapid replacement");
+            require (player.setFile (file, manager), "rapid replacement");
         player.processBlock (block, midi);
         require (block.getMagnitude (0, 257) == 0.0f, "replacement resets stopped");
         midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 127), 0);
@@ -122,6 +122,58 @@ int main()
         for (int i = 0; i < 257; ++i)
             require (std::abs (block.getSample (0, i) - (source.getSample (0, i * 2) + source.getSample (1, i * 2)) * 0.5f) < 1.0e-6f,
                      "replacement starts at beginning");
+        // Graph state uses these exact processor calls (wrapped by InternalPlugin).
+        MemoryBlock saved;
+        player.getStateInformation (saved);
+        auto savedXml = AudioProcessor::getXmlFromBinary (saved.getData(), static_cast<int> (saved.getSize()));
+        require (savedXml != nullptr && savedXml->getStringAttribute ("filePath") == file.getFullPathName(),
+                 "selected file path saved while playing");
+        AudioPlayerProcessor restored;
+        restored.prepareToPlay (1000.0, 257);
+        restored.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        AudioBuffer<float> recalled (2, 257);
+        restored.processBlock (recalled, midi);
+        require (recalled.getMagnitude (0, 257) == 0.0f, "recalled file starts stopped");
+        midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 127), 0);
+        restored.processBlock (recalled, midi);
+        for (int i = 0; i < 257; ++i)
+            for (int ch = 0; ch < 2; ++ch)
+                require (std::abs (recalled.getSample (ch, i) - source.getSample (ch, i)) < 1.0e-6f,
+                         "recalled file plays from start without opening editor");
+        {
+            std::unique_ptr<AudioProcessorEditor> editor (restored.createEditor());
+            restored.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+            MessageManager::getInstance()->runDispatchLoopUntil (10);
+            restored.processBlock (recalled, midi);
+            require (recalled.getMagnitude (0, 257) == 0.0f, "restore with open editor resets stopped");
+        }
+        XmlElement missing ("AudioPlayerState");
+        missing.setAttribute ("version", 1);
+        const auto missingPath = file.getSiblingFile ("missing.wav").getFullPathName();
+        missing.setAttribute ("filePath", missingPath);
+        MemoryBlock missingState;
+        AudioProcessor::copyXmlToBinary (missing, missingState);
+        restored.setStateInformation (missingState.getData(), static_cast<int> (missingState.getSize()));
+        midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 127), 0);
+        restored.processBlock (recalled, midi);
+        require (recalled.getMagnitude (0, 257) == 0.0f, "missing restored file stays silent");
+        restored.getStateInformation (missingState);
+        auto missingXml = AudioProcessor::getXmlFromBinary (missingState.getData(), static_cast<int> (missingState.getSize()));
+        require (missingXml != nullptr && missingXml->getStringAttribute ("filePath") == missingPath,
+                 "missing file reference survives resave");
+        restored.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        MemoryBlock validState;
+        restored.getStateInformation (validState);
+        const char malformed[] = "invalid plugin state";
+        restored.setStateInformation (malformed, sizeof (malformed));
+        MemoryBlock afterInvalid;
+        restored.getStateInformation (afterInvalid);
+        require (validState == afterInvalid, "malformed state ignored");
+        restored.setStateInformation (nullptr, 0);
+        restored.getStateInformation (afterInvalid);
+        auto emptyXml = AudioProcessor::getXmlFromBinary (afterInvalid.getData(), static_cast<int> (afterInvalid.getSize()));
+        require (emptyXml != nullptr && emptyXml->getStringAttribute ("filePath").isEmpty(), "legacy empty state clears file");
+
         require (player.setSample (nullptr, manager), "unload");
         player.processBlock (block, midi);
         require (block.getMagnitude (0, 257) == 0.0f, "unload stops");
@@ -148,7 +200,7 @@ int main()
             sampler.processBlock (original, midi);
         }
         require (original.getMagnitude (0, 257) == 0.0f, "original Sampler still tails off and stops");
-        std::cout << "PASS: loading, start/stop/restart, full duration, 470+ loops / two-hour accelerated soak, monophony, note-off, rate conversion, mono/stereo, double precision, invalid file, original Sampler.\n";
+        std::cout << "PASS: loading, start/stop/restart, full duration, 470+ loops / two-hour accelerated soak, monophony, note-off, rate conversion, mono/stereo, double precision, invalid file, file-state recall / missing / legacy / malformed state, original Sampler.\n";
     }
     catch (const std::exception& error)
     {
