@@ -180,6 +180,7 @@ public:
                                                        styleMask: getNSWindowStyleMask (windowStyleFlags)
                                                          backing: NSBackingStoreBuffered
                                                            defer: YES];
+            [window setColorSpace: [NSColorSpace sRGBColorSpace]];
             setOwner (window, this);
 
             if (@available (macOS 10.10, *))

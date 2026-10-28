@@ -54,6 +54,12 @@ namespace detail
     };
 
     //==============================================================================
+    struct ColorDelete
+    {
+        void operator() (CGColorRef ptr) const noexcept { CGColorRelease (ptr); }
+    };
+
+    using ColorPtr = std::unique_ptr<CGColor, ColorDelete>;
     using ColorSpacePtr = std::unique_ptr<CGColorSpace, ColorSpaceDelete>;
     using ContextPtr = std::unique_ptr<CGContext, ContextDelete>;
     using DataProviderPtr = std::unique_ptr<CGDataProvider, DataProviderDelete>;

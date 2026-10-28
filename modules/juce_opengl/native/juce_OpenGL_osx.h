@@ -266,6 +266,7 @@ public:
     {
         MouseForwardingNSOpenGLViewClass()  : ObjCClass<NSOpenGLView> ("JUCEGLView_")
         {
+            addMethod (@selector (viewDidMoveToWindow),   viewDidMoveToWindow);
             addMethod (@selector (rightMouseDown:),       rightMouseDown);
             addMethod (@selector (rightMouseUp:),         rightMouseUp);
             addMethod (@selector (acceptsFirstMouse:),    acceptsFirstMouse);
@@ -275,6 +276,15 @@ public:
         }
 
     private:
+        static void viewDidMoveToWindow (id self, SEL)
+        {
+            sendSuperclassMessage<void> (self, @selector (viewDidMoveToWindow));
+
+            // The containing window may belong to a plug-in host.
+            if (auto* window = [(NSOpenGLView*) self window])
+                [window setColorSpace: [NSColorSpace sRGBColorSpace]];
+        }
+
         static void rightMouseDown (id self, SEL, NSEvent* ev)      { [[(NSOpenGLView*) self superview] rightMouseDown: ev]; }
         static void rightMouseUp   (id self, SEL, NSEvent* ev)      { [[(NSOpenGLView*) self superview] rightMouseUp:   ev]; }
         static BOOL acceptsFirstMouse (id, SEL, NSEvent*)           { return YES; }
